@@ -1,7 +1,9 @@
+import {requireSession,fail} from "@/lib/security/auth";
 import {env} from "cloudflare:workers";
 import {retrieve,extractAnswer} from "@/lib/retrieval";
 import {readBody,response} from "@/lib/request";
 export async function POST(req:Request){
+ try {await requireSession(req,["kiosk","staff"],"ask",15)} catch(e){return fail(e)}
  let body;try{body=await readBody(req,6000)}catch{return response({error:"Invalid question."},400)}
  if(typeof body.question!=="string"||!body.question.trim()||body.question.length>1000)return response({error:"Please ask a question of 1–1000 characters."},400);
  const question=body.question.trim(),chunks=retrieve(question);

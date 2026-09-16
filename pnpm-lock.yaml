@@ -20,6 +20,9 @@ importers:
       '@shadcn/react':
         specifier: ^0.3.0
         version: 0.3.0(@types/react@19.2.14)(react@19.2.6)
+      '@vladmandic/face-api':
+        specifier: 1.7.15
+        version: 1.7.15
       class-variance-authority:
         specifier: 0.7.1
         version: 0.7.1
@@ -2553,6 +2556,10 @@ packages:
     peerDependenciesMeta:
       react-server-dom-webpack:
         optional: true
+
+  '@vladmandic/face-api@1.7.15':
+    resolution: {integrity: sha512-WDMmK3CfNLo8jylWqMoQgf4nIst3M0fzx1dnac96wv/dvMTN4DxC/Pq1DGtduDk1lktCamQ3MIDXFnvrdHTXDw==}
+    engines: {node: '>=14.0.0'}
 
   '@webassemblyjs/ast@1.14.1':
     resolution: {integrity: sha512-nuBEDgQfm1ccRp/8bCQrx1frohyufl4JlbMMZ4P1wpeOfDhF6FQkxZJ1b/e+PLwr6X1Nhw6OLme5usuBWYBvuQ==}
@@ -6711,6 +6718,8 @@ snapshots:
       vitefu: 1.1.3(vite@8.0.13(@types/node@22.19.19)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.47.1)(tsx@4.22.1))
     optionalDependencies:
       react-server-dom-webpack: 19.2.6(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(webpack@5.106.2(esbuild@0.28.0)(lightningcss@1.32.0)(postcss@8.5.23))
+
+  '@vladmandic/face-api@1.7.15': {}
 
   '@webassemblyjs/ast@1.14.1':
     dependencies:

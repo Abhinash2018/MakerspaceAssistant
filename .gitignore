@@ -49,3 +49,9 @@ next-env.d.ts
 
 !.env.example
 *.tsbuildinfo
+# Biometric models, Python environments and local operational credentials
+face-service/models/*.onnx
+face-service/.venv/
+__pycache__/
+*.pyc
+staff-setup*.txt

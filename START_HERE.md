@@ -1,67 +1,49 @@
-# Start here
+# Run the updated assistant
 
-This is the complete source of your Ingram Makerspace Assistant prototype.
-Open the ingram-maker-assistant folder in VS Code. Read README.md for the
-implemented behavior and current limitations.
+## 1. Kiosk app
 
-## Main code
-
-- app/page.tsx: touch-first interface, animated ring, voice captions, check-in,
-  photo consent, camera preview, review, and session reset.
-- app/globals.css: TXST maroon/gold theme and responsive tablet layout.
-- app/api/ask/route.ts: server-side retrieval-augmented generation endpoint.
-- lib/retrieval.ts: page-based lexical retrieval and document-excerpt fallback.
-- data/knowledge.json: extracted content from all twelve supplied PDFs.
-- app/api/checkin/route.ts: validated check-in and consented photo persistence.
-- db/schema.ts and drizzle/: visit database schema and SQL migration.
-- public/documents/: original PDFs used for citations.
-- .env.example: server-side AI configuration template, with no API key.
-
-## Run locally
-
-Install Node.js 24 and pnpm using a terminal:
-
-    npm install -g pnpm@11.25.0
-
-Inside this project's folder:
+Use Node.js 24 and the pnpm version in package.json. In the project directory:
 
     pnpm install --frozen-lockfile
+    node ops/generate-local-secrets.mjs
 
-Copy .env.example to .env. To enable generated answers, set OPENAI_API_KEY
-in .env to your own key. OPENAI_MODEL defaults to gpt-4.1-mini. Leave the
-key blank to use clearly labeled document excerpts. Never commit .env.
-
-Build once to create the local Worker configuration:
+The second command creates a private, ignored `.dev.vars`; it refuses to overwrite an existing file. Keep its encryption key stable. Add your OpenAI key there if you want generated RAG responses. Do not put real keys in `.env.example` or commit them.
 
     pnpm build
-
-Initialize the local database using the included migration:
-
     pnpm exec wrangler d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_pale_ultimo.sql
-
-Start development:
-
+    pnpm exec wrangler d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0001_far_reaper.sql
     pnpm dev
 
-Open the localhost address printed by the terminal (normally port 5173).
-Local D1 and R2 data stay on your computer; this does not download live
-visitor records. The ZIP includes no student records, credentials,
-node_modules, build output, or Git history.
+Run each migration once, in order. The commands above initialize a fresh local database; do not replay migration 0000 on an existing database. Open the localhost address printed by the terminal.
 
-## iPad and hosting
+## 2. Open the kiosk
 
-For the actual iPad, use the HTTPS hosted app. A plain HTTP address on your
-computer's local network is not sufficient for camera access. Test camera
-permissions and browser speech support on the physical iPad. Text entry
-remains available when speech recognition is unavailable.
+Open the app and touch Begin. Check in and Ask a question appear immediately; the browser starts its session automatically. No pairing or staff code is required. Staff enrollment-removal controls remain at `/staff` behind `STAFF_ACCESS_KEY`.
 
-The original deployment uses Sites with Cloudflare Workers, D1, and R2.
-It is not a static HTML-only application. The included .openai/hosting.json
-identifies your existing Site; do not publish another person's fork against
-that project. A separate host needs its own Worker, D1/R2 bindings, secrets,
-and access controls. The original private site's access protection is not
-part of an arbitrary standalone deployment.
+Students need no staff code: choose Check in, enter name and NetID, optionally take a photo and enroll for future face matching, then confirm. These details are self-reported. Home keeps only Check in and Ask a question; Check in with face is inside Check in.
 
-The AI generation endpoint is implemented but the original deployment has
-no API key yet. Check-in is self-reported; it does not verify TXST identity,
-operate doors, or replace FOM. See README.md before campus deployment.
+## 3. Use face check-in
+
+No Python server, face API key, or separate hosting is needed. Face recognition uses the bundled models in the browser. If upgrading an older local setup, change `FACE_ENABLED=false` to `FACE_ENABLED=true` in your ignored `.dev.vars`, preserve your existing encryption key, and restart. New generated configurations enable it by default.
+
+First visit: Check in → name → NetID → select “Enable faster check-in next time” → allow camera → Start scan → follow the prompts → confirm. The photo is optional; skipping it still records the visit.
+
+Returning visit: Check in → Check in with face → consent → Start scan. A recognized face records the visit without retyping details. Photo-only records from earlier versions need a fresh opt-in enrollment first.
+
+Use HTTPS on the tablet and allow Safari camera access. Keep one face centered in good lighting. Models load on the first scan; later scans reuse them. If no confident match is found, retry or use the name/NetID flow.
+
+## 4. Cleanup while offline
+
+With MAKERSPACE_URL and MAINTENANCE_KEY supplied securely to a trusted scheduler, run:
+
+    node ops/purge.mjs
+
+Schedule hourly and monitor failures. This is in addition to active-kiosk cleanup. For a private Sites origin, the scheduler must also satisfy hosting-level authentication; see README.md. No scheduler is provisioned by these files.
+
+## 5. Security tests
+
+    node tests/security.cjs
+
+    node tests/face-models.cjs
+
+The source ZIP includes the browser face models and their license. It contains no student records or live credentials. iPad camera performance and real-user accuracy still require testing on the actual device.
