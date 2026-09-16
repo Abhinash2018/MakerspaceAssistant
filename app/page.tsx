@@ -6,11 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Orb } from "@/components/maker-orb";
 import { api, ApiError } from "@/lib/client-api";
-type Step = "idle" | "choose" | "name" | "netid" | "consent" | "face-consent" | "camera" | "review" | "done" | "ask";
+type Step = "idle" | "choose" | "name" | "netid" | "consent" | "camera" | "review" | "done" | "ask";
 type Source = { title: string; page: number; file: string };
 type Device = { role: string; csrf: string; faceEnabled: boolean; expiresAt: number };
 import { FACE_CONSENT_VERSION as faceConsentVersion, FaceSample } from "@/lib/face-contract";
 import { scanVideo } from "@/lib/live-face";
+import { waitForCamera } from "@/lib/camera-ready";
 export default function Home() {
   const [step, setStep] = useState<Step>("idle"), [caption, setCaption] = useState(""), [heard, setHeard] = useState(""), [input, setInput] = useState("");
   const [name, setName] = useState(""), [netid, setNetid] = useState(""), [photo, setPhoto] = useState<string | null>(null);
@@ -71,7 +72,7 @@ export default function Home() {
       if (current()) setDevice(d);
     });
   }
-  function manual() { generation.current++; cameraPending.current = false; stopCamera(); stopMic(); setReturning(false); visitId.current = ""; setPhoto(null); setFaceConsent(false); setPhotoConsent(false); scan.current = null; setSources([]); setInput(""); setHeard(""); setStep("name"); say("Let’s check you in. What’s your full name?"); }
+  function manual() { generation.current++; request.current?.abort(); busyRef.current = false; setBusy(false); cameraPending.current = false; stopCamera(); stopMic(); setReturning(false); visitId.current = ""; setPhoto(null); setFaceConsent(false); setPhotoConsent(false); scan.current = null; setSources([]); setInput(""); setHeard(""); setStep("name"); say("Let’s check you in. What’s your full name?"); }
   function listen() {
     if (listening) { recognition.current?.stop(); return; } window.speechSynthesis?.cancel(); setSpeaking(false);
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -92,8 +93,8 @@ export default function Home() {
   }
   async function openCamera() {
     if (cameraPending.current) return; cameraPending.current = true; const g = generation.current;
-    stopMic(); setScanHint(""); setPhotoConsent(!returning); setHeard(returning ? "I agree to face check-in." : faceConsent ? "I agree to a photo and optional face enrollment." : "I agree to a check-in photo.");
-    try { const media = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false }); if (g !== generation.current) { media.getTracks().forEach(t => t.stop()); return; } stream.current = media; setCameraOn(true); setStep("camera"); say(returning || faceConsent ? "Center your face and tap Start scan. Follow the three prompts." : "Center yourself in the preview, then tap Take photo."); }
+    stopMic(); setScanHint(""); setPhotoConsent(true); setHeard(faceConsent ? "I agree to a photo and optional face enrollment." : "I agree to a check-in photo.");
+    try { const media = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false }); if (g !== generation.current) { media.getTracks().forEach(t => t.stop()); return; } stream.current = media; setCameraOn(true); setStep("camera"); say(faceConsent ? "Center your face and tap Start scan. Follow the three prompts." : "Center yourself in the preview, then tap Take photo."); }
     catch { if (g === generation.current) setError("Camera access is unavailable. Allow it in your browser or use check-in without a photo."); }
     finally { if (g === generation.current) cameraPending.current = false; }
   }
@@ -101,17 +102,48 @@ export default function Home() {
     const v = video.current; if (!v?.videoWidth) throw new Error("Camera is still starting.");
     const c = document.createElement("canvas"); c.width = 640; c.height = Math.round(640 * v.videoHeight / v.videoWidth); c.getContext("2d")!.drawImage(v, 0, 0, c.width, c.height); return c.toDataURL("image/jpeg", .82);
   }
+  async function recognizeFace(isReturning: boolean, signal: AbortSignal, current: () => boolean) {
+    const preview = await waitForCamera(() => video.current?.srcObject === stream.current ? video.current : null, current);
+    const challenge = await api("/api/face/challenge", { purpose: isReturning ? "checkin" : "enroll", consent: true }, device?.csrf, signal);
+    if (!current()) return;
+    const result = await scanVideo(preview, challenge.direction, current, say, setScanHint, snap);
+    if (!current()) return;
+    stopCamera();
+    scan.current = { samples: result.samples, model: result.model, challengeId: challenge.id };
+    if (isReturning) {
+      say("Checking your enrolled face.");
+      if (!visitId.current) visitId.current = crypto.randomUUID();
+      await api("/api/face/checkin", { id: visitId.current, consent: true, ...scan.current }, device?.csrf, signal);
+      if (!current()) return;
+      scan.current = null; setHeard(""); setStep("done"); say("You’re checked in. Welcome to the Makerspace.");
+    } else {
+      setPhoto(result.photo); setStep("review"); say("Review your photo and details. Confirm to save this visit and enroll your face for 90 days.");
+    }
+  }
+  async function startFaceCheckin() {
+    if (busyRef.current || cameraPending.current) return;
+    if (!device?.faceEnabled) { setError("Face check-in is temporarily unavailable. Please use your name and NetID."); return; }
+    stopMic(); stopCamera(); setInput(""); setHeard(""); setScanHint(""); setReturning(true); setPhoto(null); setPhotoConsent(false); setFaceConsent(false); scan.current = null; setStep("camera");
+    // Tapping Check in with face initiates matching for a previously opted-in user.
+    await work(async (signal, current) => {
+      say("Opening the camera for face check-in.");
+      try {
+        const media = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+        if (!current()) { media.getTracks().forEach(t => t.stop()); return; }
+        stream.current = media; setCameraOn(true);
+        await recognizeFace(true, signal, current);
+      } catch (e) {
+        if (current()) stopCamera();
+        if (e instanceof DOMException && ["NotAllowedError", "NotFoundError", "NotReadableError"].includes(e.name)) throw new Error("Camera access is unavailable. Allow camera access and try again, or use your name and NetID.");
+        throw e;
+      }
+    });
+  }
   async function capture() {
     if (!cameraOn) { await openCamera(); return; }
     await work(async (signal, current) => {
-      if (!returning && !faceConsent) { setPhoto(snap()); stopCamera(); setStep("review"); say("Please review your details and photo, then confirm your check-in."); return; }
-      const challenge = await api("/api/face/challenge", { purpose: returning ? "checkin" : "enroll", consent: true }, device?.csrf, signal);
-      const result = await scanVideo(video.current!, challenge.direction, current, say, setScanHint, snap);
-      if (!current()) return;
-      stopCamera();
-      scan.current = { samples: result.samples, model: result.model, challengeId: challenge.id };
-      if (returning) { say("Checking your enrolled face."); if (!visitId.current) visitId.current = crypto.randomUUID(); await api("/api/face/checkin", { id: visitId.current, consent: true, ...scan.current }, device?.csrf, signal); if (!current()) return; scan.current = null; setHeard(""); setStep("done"); say("You’re checked in. Welcome to the Makerspace."); }
-      else { setPhoto(result.photo); setStep("review"); say("Review your photo and details. Confirm to save this visit and enroll your face for 90 days."); }
+      if (!faceConsent) { setPhoto(snap()); stopCamera(); setStep("review"); say("Please review your details and photo, then confirm your check-in."); return; }
+      await recognizeFace(false, signal, current);
     });
   }
   function skipPhoto() { generation.current++; cameraPending.current = false; stopCamera(); setPhoto(null); setPhotoConsent(false); setFaceConsent(false); scan.current = null; setStep("review"); say("Please confirm your details to save this visit without a photo."); }
@@ -134,10 +166,9 @@ export default function Home() {
       <div className="controls">
         {step === "choose" && <><Button className="action" disabled={busy || !device} onClick={manual}><span className="action-label"><UserRound size={18}/> Check in</span><ArrowRight size={17}/></Button><Button className="action secondary" disabled={busy || !device} onClick={() => { setStep("ask"); setSources([]); setInput(""); setHeard(""); say("What would you like to know about the Makerspace?"); }}><span className="action-label"><BookOpen size={18}/> Ask a question</span><ArrowRight size={17}/></Button></>}
         {typed && <form onSubmit={submit}><label className="field-label" htmlFor="response">{step === "name" ? "Full name" : step === "netid" ? "TXST NetID" : "Your question"}</label><div className="form-row" style={{ marginTop: 9 }}><Input id="response" className="text-input" value={input} onChange={e => setInput(e.target.value)} maxLength={step === "ask" ? 1000 : 100} autoComplete="off" autoCapitalize="none" spellCheck={false} disabled={busy}/>{<Button type="button" variant="secondary" className="icon-button" onClick={listen} disabled={busy} aria-label={listening ? "Stop listening" : "Use microphone"}>{listening ? <Square size={18}/> : <Mic size={19}/>}</Button>}<Button type="submit" className="icon-button" disabled={busy || !input.trim()} aria-label="Continue"><ArrowRight size={20}/></Button></div><p className="small-note">Review recognized speech before sending.</p></form>}
-        {step === "name" && <Button className="action secondary" onClick={() => { stopMic(); setInput(""); setReturning(true); setStep("face-consent"); setHeard(""); say("Use your enrolled face to record this visit? A short live camera scan will match your face. Follow the head-turn prompts. The video stays on this device."); }}><span className="action-label"><ScanFace size={18}/> Check in with face</span><ArrowRight size={17}/></Button>}
+        {step === "name" && <Button className="action secondary" disabled={busy} onClick={startFaceCheckin}><span className="action-label"><ScanFace size={18}/> Check in with face</span><ArrowRight size={17}/></Button>}
         {step === "consent" && <><div className="consent-note">The check-in photo, name, NetID, and visit time expire after 30 days. A photo is optional.</div>{device?.faceEnabled && <label className="consent-note flex items-start gap-3"><Checkbox checked={faceConsent} onCheckedChange={v => setFaceConsent(v === true)} aria-label="Enroll my face for future check-ins"/><span>Enable faster check-in next time: I agree to a short live face scan and storage of an encrypted face template with my name and NetID for 90 days. The video is not saved. I can ask staff to remove my enrollment sooner.</span></label>}<Button className="action" onClick={openCamera}><span className="action-label"><Camera size={18}/> I agree · Enable camera</span><ArrowRight size={17}/></Button><Button className="action secondary" onClick={skipPhoto}>Continue without photo</Button></>}
-        {step === "face-consent" && <><div className="consent-note">For students who opted into face check-in on a previous visit. Your video is not saved.</div>{!device?.faceEnabled && <p className="error">Face check-in is temporarily unavailable. You can check in with your name and NetID.</p>}<Button className="action" disabled={!device?.faceEnabled} onClick={openCamera}>I agree · Start face check-in <ScanFace size={18}/></Button><Button variant="ghost" onClick={manual}>Use name and NetID</Button></>}
-        {step === "camera" && <><div className="camera"><video ref={video} autoPlay playsInline muted onClick={() => video.current?.play()} aria-label="Camera preview"/><div className="camera-guide"/><div className="camera-label">Live preview · not saved</div></div>{scanHint && <p className="small-note" role="status" aria-live="polite">{scanHint}</p>}<Button className="action" onClick={capture} disabled={busy}>{busy ? "Follow the spoken prompts…" : !cameraOn ? "Restart camera" : returning || faceConsent ? "Start scan" : "Take photo"}<Camera size={18}/></Button>{!busy && <Button variant="ghost" onClick={returning ? manual : skipPhoto}>Cancel photo</Button>}</>}
+        {step === "camera" && <><div className="camera"><video ref={video} autoPlay playsInline muted onClick={() => video.current?.play()} aria-label="Camera preview"/><div className="camera-guide"/><div className="camera-label">Live preview · not saved</div></div>{scanHint && <p className="small-note" role="status" aria-live="polite">{scanHint}</p>}{returning ? <>{error && !busy && <Button className="action" onClick={startFaceCheckin}>Try again <ScanFace size={18}/></Button>}<Button variant="ghost" onClick={manual}>Cancel · Use name and NetID</Button></> : <><Button className="action" onClick={capture} disabled={busy}>{busy ? "Follow the spoken prompts…" : !cameraOn ? "Restart camera" : faceConsent ? "Start scan" : "Take photo"}<Camera size={18}/></Button>{!busy && <Button variant="ghost" onClick={skipPhoto}>Cancel photo</Button>}</>}</>}
         {step === "review" && <>{photo && <div className="camera"><img src={photo} alt="Your photo, not yet saved"/><div className="camera-label">Review · not yet saved</div></div>}<div className="details"><strong>{name}</strong><span>{netid}</span></div><p className="small-note">Visit{photo ? " and photo" : ""} retained 30 days{faceConsent ? " · face enrollment retained 90 days" : ""}.</p><Button className="action" onClick={save} disabled={busy}>{busy ? "Saving…" : "Confirm & save check-in"}<Check size={18}/></Button><Button variant="ghost" disabled={busy} onClick={() => { setPhoto(null); scan.current = null; setStep("consent"); say("You can take a new photo or continue without one."); }}>Change photo choice</Button></>}
         {step === "done" && <Button className="action" onClick={reset}>Finish <ArrowRight size={18}/></Button>}
         {step === "choose" && error && !device && <Button variant="ghost" disabled={busy} onClick={begin}>Try again</Button>}

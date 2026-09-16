@@ -1,0 +1,1 @@
+CREATE INDEX `idx_visits_time_id` ON `visits` (`created_at`,`id`);

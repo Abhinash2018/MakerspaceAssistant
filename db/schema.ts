@@ -5,7 +5,7 @@ export const visits = sqliteTable("visits", {
   consentVersion: text("consent_version").notNull(), createdAt: text("created_at").notNull(),
   expiresAt: integer("expires_at").notNull().default(0), sessionId: text("session_id"),
   method: text("method").notNull().default("legacy-unverified"), profileId: text("profile_id"),
-}, t => [index("idx_visits_expiry").on(t.expiresAt), index("idx_visits_profile_time").on(t.profileId, t.createdAt)]);
+}, t => [index("idx_visits_expiry").on(t.expiresAt), index("idx_visits_time_id").on(t.createdAt, t.id), index("idx_visits_profile_time").on(t.profileId, t.createdAt)]);
 export const sessions = sqliteTable("sessions", {
   id: text("id").primaryKey(), role: text("role").notNull(), csrf: text("csrf").notNull(), expiresAt: integer("expires_at").notNull(),
 }, t => [index("idx_sessions_expiry").on(t.expiresAt)]);

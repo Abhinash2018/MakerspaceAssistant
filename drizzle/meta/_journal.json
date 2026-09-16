@@ -15,6 +15,13 @@
       "when": 1789517051058,
       "tag": "0001_far_reaper",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789521969498,
+      "tag": "0002_abandoned_eternity",
+      "breakpoints": true
     }
   ]
 }

@@ -8,10 +8,16 @@ Touch-first iPad kiosk for TXST Ingram Hall Makerspace. The interface stays sile
 2. Home offers only Check in and Ask a question. Check in opens the normal name → NetID → optional photo → confirmation flow. No staff verification code is required. A Check in with face option appears inside Check in.
 3. Photo capture is optional and requires explicit consent. A separate opt-in permits an encrypted face template and entered identity to be retained for 90 days. Existing photos are never automatically enrolled.
 4. For enrollment, the browser continuously detects faces in live video and captures three stable poses: front, a randomly selected head turn, then front. The student reviews the photo and confirms the visit and enrollment. Only the first image is uploaded as the consented visit photo. Video stays on the device. Three face descriptors and pose measurements are sent to the backend; only the averaged descriptor is retained.
-5. On later visits, the student chooses Check in → Check in with face, consents to the scan, and completes the short head-turn scan. A sufficiently strong, unambiguous match records the visit without asking for a name or NetID. Returning scan images are discarded. Uncertain/no-match scans fall back to name-and-NetID check-in.
+5. On later visits, the student chooses Check in → Check in with face, and the camera opens and starts the head-turn scan automatically. No repeated agreement or Start scan button is shown. A sufficiently strong, unambiguous match records the visit without asking for a name or NetID. Returning scan images are discarded. Uncertain/no-match scans fall back to name-and-NetID check-in.
 6. Staff can immediately revoke enrollment at `/staff` after verifying the student's request. Expired/revoked profiles cannot match.
 
 Names and NetIDs are self-reported and labeled that way in stored visits. No TXST SSO or directory verification is configured. Matching a face recalls the identity supplied at enrollment; it does not establish a university-verified identity. An active face enrollment cannot be replaced by entering its NetID again. No device pairing is required. Staff sign-in at `/staff` is only for enrollment administration. The kiosk records visits; it neither unlocks doors nor measures current occupancy.
+
+## Staff check-in history
+
+Open `/staff` on a staff device and sign in using `STAFF_ACCESS_KEY`. The history lists name, NetID, check-in time in America/Chicago (including daylight saving), and a saved visit photo when consented. It shows newest first with 50-row cursor pages, a Texas-local date filter, Refresh, and a CSV download of the displayed rows. Load more before downloading if you need additional rows. CSV cells neutralize spreadsheet formulas in user-entered names.
+
+History and photos require a staff session on every request; anonymous/kiosk sessions cannot read them. Photos are served through protected routes rather than public storage URLs. All responses disable caching. Expired visits/photos are excluded even if physical cleanup is delayed. Returning face scans do not save a new photo, so those visits display No photo. The page clears its records on sign-out or staff-session expiry. Face enrollment removal remains below the history.
 
 ## App-level API security
 

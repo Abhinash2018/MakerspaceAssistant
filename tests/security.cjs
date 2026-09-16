@@ -12,7 +12,7 @@ const db = { prepare(query) { return { bind(...args) { return {
   async all() { return { results: sql.prepare(query).all(...args) }; },
   async run() { return { meta: sql.prepare(query).run(...args) }; }
 }; }, async first(){return sql.prepare(query).get()||null;} }; }, async batch(statements) { sql.exec('BEGIN'); try { const result=[]; for(const stmt of statements) result.push(await stmt.run()); sql.exec('COMMIT'); return result; } catch(e){sql.exec('ROLLBACK');throw e;} } };
-const bucket = { async put(key, bytes) { objects.set(key,{key,bytes,uploaded:new Date()}); }, async delete(key) { if(deletionFails) throw Error('storage unavailable'); objects.delete(key); }, async list(){return {objects:[...objects.values()],truncated:false};} };
+const bucket = { async get(key) {const o=objects.get(key);return o ? {body:o.bytes} : null;}, async put(key, bytes) { objects.set(key,{key,bytes,uploaded:new Date()}); }, async delete(key) { if(deletionFails) throw Error('storage unavailable'); objects.delete(key); }, async list(){return {objects:[...objects.values()],truncated:false};} };
 const cache = new Map();
 function load(file) {
   file = path.resolve(file);
@@ -77,10 +77,29 @@ async function grant(staff,kiosk){const issued=await call('verification',{name:'
  const contract=load('lib/face-contract.ts');assert.equal(contract.scanValid(samples('left'),'right'),false);assert.equal(contract.scanValid(samples('left'),'left'),true);assert.equal(contract.validVector(Array(128).fill(0)),false);
  const ciphertext=await load('lib/security/crypto.ts').seal({secret:'value'},'one');await assert.rejects(()=>load('lib/security/crypto.ts').unseal(ciphertext,'different'));
  assert.equal((await call('enrollment/revoke',{netid:'test123',attested:true},staff)).status,200);assert.equal(sql.prepare('SELECT count(*) AS n FROM face_profiles').get().n,0);
+ const history=load('app/api/staff/visits/route.ts'), photoRoute=load('app/api/staff/visits/[id]/photo/route.ts');
+ const historyGet=(session,query='')=>history.GET(req('staff/visits'+query,undefined,session,'GET'));
+ const photoGet=(session,visit=enrollment.id)=>photoRoute.GET(req('staff/visits/'+visit+'/photo',undefined,session,'GET'),{params:Promise.resolve({id:visit})});
+ assert.equal((await historyGet()).status,401);assert.equal((await historyGet(kiosk)).status,403);
+ assert.equal((await photoGet()).status,401);assert.equal((await photoGet(kiosk)).status,403);
+ const list=await historyGet(staff);assert.equal(list.status,200);assert.equal(list.headers.get('Cache-Control'),'no-store');
+ const page=await list.json();assert.equal(page.visits.length,3);assert.equal(page.visits.find(v=>v.id===id).photoUrl,null);assert.equal(page.visits.find(v=>v.id===enrollment.id).photoUrl,'/api/staff/visits/'+enrollment.id+'/photo');assert(!JSON.stringify(page).includes('photo_key'));
+ const picture=await photoGet(staff);assert.equal(picture.status,200);assert.equal(picture.headers.get('Cache-Control'),'private, no-store');assert.equal((await picture.arrayBuffer()).byteLength,180);
+ assert.equal((await photoGet(staff,id)).status,404);
+ const expiresBefore=sql.prepare('SELECT expires_at FROM visits WHERE id=?').get(enrollment.id).expires_at;
+ sql.prepare('UPDATE visits SET expires_at=1 WHERE id=?').run(enrollment.id);assert.equal((await photoGet(staff)).status,404);assert(!(await (await historyGet(staff)).json()).visits.some(v=>v.id===enrollment.id));
+ sql.prepare('UPDATE visits SET expires_at=?,photo_consent=0 WHERE id=?').run(expiresBefore,enrollment.id);assert.equal((await photoGet(staff)).status,404);sql.prepare('UPDATE visits SET photo_consent=1 WHERE id=?').run(enrollment.id);
+ assert.equal((await historyGet(staff,'?date=2026-02-30')).status,400);assert.equal((await historyGet(staff,'?cursor=bad')).status,400);
+ const historyHelpers=load('lib/visit-history.ts');const spring=historyHelpers.texasDayRange('2026-03-08'),fall=historyHelpers.texasDayRange('2026-11-01');assert.equal(Date.parse(spring[1])-Date.parse(spring[0]),23*3600000);assert.equal(Date.parse(fall[1])-Date.parse(fall[0]),25*3600000);
+ const csv=historyHelpers.historyCsv([{id:'x',name:'=1+1',netid:'abc123',checkedInAt:new Date().toISOString(),photoUrl:null}]);assert(csv.includes('"\'=1+1"'),'CSV formula neutralized');
+ const stamp=new Date().toISOString();for(let n=0;n<55;n++)sql.prepare("INSERT INTO visits (id,full_name,net_id,photo_consent,consent_version,created_at,expires_at) VALUES (?,?,?,0,'test',?,?)").run('page-'+String(n).padStart(3,'0'),'Test Fixture','fixture123',stamp,Date.now()+86400000);
+ const firstPage=await (await historyGet(staff)).json();assert.equal(firstPage.visits.length,50);assert(firstPage.nextCursor);
+ const secondPage=await (await historyGet(staff,'?cursor='+encodeURIComponent(firstPage.nextCursor))).json();assert.equal(secondPage.visits.length,8);assert.equal(new Set([...firstPage.visits,...secondPage.visits].map(v=>v.id)).size,58,'pagination does not duplicate tied timestamps');
+ assert.equal((await (await historyGet(staff,'?date=2000-01-01')).json()).visits.length,0);
  const cleanup=load('lib/security/retention.ts');sql.exec('UPDATE visits SET expires_at=1');deletionFails=true;await assert.rejects(()=>cleanup.purgeExpired());assert(sql.prepare('SELECT count(*) AS n FROM visits WHERE photo_key IS NOT NULL').get().n>0,'retry photo deletion');deletionFails=false;await cleanup.purgeExpired();assert.equal(objects.size,0);assert.equal(sql.prepare('SELECT count(*) AS n FROM visits').get().n,0);
  sql.exec('DELETE FROM rate_limits');const auth=load('lib/security/auth.ts');await auth.rateLimit('test',2);await auth.rateLimit('test',2);await assert.rejects(()=>auth.rateLimit('test',2),e=>e.status===429);
  sql.exec('UPDATE sessions SET expires_at=1');assert.equal((await call('ask',{question:'PPE'},kiosk)).status,401);
  const renewed=await login({role:'kiosk'});
  assert.equal((await call('checkin',{...base,id:crypto.randomUUID()},renewed)).status,200,'expired browser can restart without a pairing code');
- console.log('PASS: route authentication, roles, CSRF, automatic kiosk sessions, self-service identity validation, enrollment overwrite prevention, consent, retries, encrypted profiles, face challenge replay, ambiguous matches, revocation, deletion failures and retry, rate limits, session expiry.');
+ console.log('PASS: route authentication, roles, CSRF, automatic kiosk sessions, self-service identity validation, enrollment overwrite prevention, consent, retries, encrypted profiles, face challenge replay, ambiguous matches, revocation, deletion failures and retry, rate limits, session expiry, staff-only history/photos, expiry filtering, pagination, DST dates, CSV escaping.');
 })().catch(e=>{console.error(e);process.exitCode=1;});
